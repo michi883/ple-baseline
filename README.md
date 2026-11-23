@@ -1,31 +1,40 @@
 # PLE entry: Pi on Claude Opus 5.5 with Clash Flag
 
-An entry for the Physical-Engineering's Last Exam harness competition. It is the organizers' [submission template](https://github.com/physical-engineerings-last-exam/submission-template) (the [Pi](https://github.com/badlogic/pi-mono) coding agent calling `google-cloud/claude-opus-5-5`) plus one addition of ours: a small validation layer (`scope_guard.py`) that runs deterministic checks of the restrictions an instruction states, and shows the agent what fails them while it can still act.
+An entry for the Physical-Engineering's Last Exam harness competition. It is the organizers' [submission template](https://github.com/physical-engineerings-last-exam/submission-template) (the [Pi](https://github.com/badlogic/pi-mono) coding agent calling `google-cloud/claude-opus-5-5`) plus one addition of ours: a small validation layer (`scope_guard.py`). It runs deterministic checks of the restrictions an instruction states, and shows the agent what fails them while it can still act.
 
-- **Clash Flag, the main contribution.** When a task asks for an IFC model and forbids clashes, it reports the pairs of elements whose solids overlap. It targets a failure that zeroed two dev tasks. Repairs prompted by the flag score 0.920 and 0.934 on those tasks with the public grader, but in replays: see [Evidence](#evidence-what-each-result-is) for what each result is.
-- **Scope Guard's instruction checks, supplementary.** Two checks of explicit scope restrictions (a numbered unit, a write freeze). No score gain has been measured for them.
+**Clash Flag, the main contribution.** When a task asks for an IFC model and forbids clashes, Clash Flag runs IfcOpenShell's standard clash tree on every IFC file the agent builds. It appends the clashing pairs to that command's output.
+- **The autonomous run in `artifacts/`.** On `data-hall-mep-routing`, the agent's first build (turn 73) had **23 clashing pairs**. The warning appeared in that build's own output, and the agent investigated and repaired its own build script. The model was clash-free by turn 81, about 7 minutes later.
+- **Grade:** the task's verifier scored the final deliverable **0.904**: valid, 0 clashes, connectivity passed. The organizers' saved run of this task scored 0 on the clash gate.
+- **Caveat:** one run, with no matched run without the flag, so the score gain caused by the flag is not measured.
 
-Both call no model, only flag, and are inactive unless the instruction states the restriction they check.
+**Scope Guard's instruction checks, supplementary.** Two checks of explicit scope restrictions (a numbered unit, a write freeze). No score gain has been measured for them.
+
+All the checks call no model, only flag, and are inactive unless the instruction states the restriction they check. See [Evidence](#evidence-what-each-result-is) for what each result is.
 
 ## What is whose
 
-- **The organizers' template (Google LLC, Apache-2.0):** every file except the ones below. The first commit of this repository, `d988c45`, is the template unchanged, with the organizers' own dev-set artifacts.
+- **The organizers' template (Google LLC, Apache-2.0):** every file except the ones below. The first commit of this repository, `d988c45`, is the template unchanged, with the organizers' own saved dev-set artifacts.
 - **Ours (Apache-2.0):** `scope_guard.py`, `ifc_clash.py`, `test_scope_guard.py`, `test_clash_flag.py`, `test_harness_wiring.py`, this README, and the changes to `harness.py` (2026-11-22). Those changes create the guard, hand the relay the guard's session proxy, and append the guard's note to the final message.
 - **Used, not vendored:** Clash Flag runs [IfcOpenShell](https://ifcopenshell.org)'s standard clash tree (`ifcopenshell.geom`, LGPL-3.0) with the task container's own `python3` and its installed IfcOpenShell. No IfcOpenShell code is in this repository, and the harness installs nothing new.
+- **The organizers' saved dev-set run** (the artifacts in `d988c45`, mean 0.491) is theirs. It was made with Harbor's own Pi agent inside the task container, without MCP tools, not with this template's harness.
 - **Not in this repository:** the third-party starter harness whose failure motivated Scope Guard, and our analysis of it. Both are in [ple-veriflow-failure-analysis](https://github.com/michi883/ple-veriflow-failure-analysis).
 
 ## Dev-set artifacts in this commit
 
-**Pending re-export.** The artifact below was made by the previous version of this harness (`81c4e77`, before Clash Flag). Clash Flag is inactive on that task, which has no IFC deliverable. Even so, the rules require artifacts exported by the submitted harness, so it has to be re-run before this commit is submitted.
+`artifacts/` holds **2 of 29 dev tasks**, each from one run of this harness (tree `a0a44f50…`, made at commit `bd733d9`; later commits changed only this README), exported by `eval/run.py`. The other 27 dev tasks were not run and count 0, so the **dev score is (0.904 + 0.348) / 29 = 0.043**.
 
-`artifacts/` holds **one task of 29**: `engineers-estimate-check`, from a single run of the previous harness (run `my-harness-20261122-203043`, exported by `eval/run.py`). The other 28 dev tasks were not run and count 0, so the dev score is 1.0 / 29 = 0.034. The organizers' artifacts for the other tasks were removed because this harness did not produce them.
+| Task | Score | Agent time | Model calls | Prompt tokens (cached) | Output tokens | Cost at list price |
+|---|---|---|---|---|---|---|
+| `data-hall-mep-routing` (run `r1b`) | **0.904** (valid, 0 clashes, connectivity passed) | 66 min | 101 | 24.6M (95%) | 408k | $18.92 |
+| `engineers-estimate-check` (run `r1a`) | **0.348** (16 of 46 rubric points) | 30 min | 46 | 8.9M (93%) | 195k | $8.65, judge included |
 
-- Local score on that task: 1.0 (46 of 46 rubric points). Judge: `claude-opus-5-5`.
-- Model: `claude-opus-5-5`, the model `submission.yaml` declares, served for the run from a personal Anthropic API key through a local LiteLLM proxy.
-- Usage: 9.42M input tokens (93% cached), 176k output tokens, 26 min 45 s of agent time, about $8.50 at list price.
-- **Scope Guard was active in that run and raised no flag**: the agent never wrote a row outside the section the instruction confines it to. The score is therefore not evidence that the guard works.
-  - The same model scored 0.543 on this task in the organizers' saved dev-set run (the artifacts in this repository's first commit).
-  - That run used Harbor's own Pi agent inside the task container, without MCP tools, not this template's harness.
+- **Model:** `claude-opus-5-5`, the model `submission.yaml` declares, served for the runs from a personal Anthropic API key through a local LiteLLM proxy (1.90.0).
+- **Judges:** the MEP task's own programmatic verifier; for `engineers-estimate-check`, the kit's rubric judge, `claude-opus-5-5`.
+- **Clash Flag:** fired once in the MEP run, and the agent acted on it (above). It cannot fire on `engineers-estimate-check`, which has no IFC deliverable.
+- **Scope Guard:** active on `engineers-estimate-check` ("confined to Section 2") and raised no flag.
+  - That score varies from run to run: an earlier run of this harness before Clash Flag (`81c4e77`), with identical behaviour on this task, scored 1.0. The organizers' saved run scored 0.543.
+  - The 1.0 is not this entry's score.
+- Each `trajectory.json` is the kit's optional, ungraded record of the run, kept as exported.
 
 ## Files
 
@@ -40,7 +49,7 @@ Both call no model, only flag, and are inactive unless the instruction states th
 | `ifc_clash.py` | Clash Flag's checker, sent to the task container's `python3` |
 | `test_clash_flag.py`, `test_scope_guard.py`, `test_harness_wiring.py` | Their tests |
 | `package.json`, `package-lock.json` | Pi 1.1.0 and every package it uses, pinned. To upgrade, edit `package.json`, run `npm install --package-lock-only`, commit both |
-| `artifacts/` | Dev-set artifacts: one task (see above) |
+| `artifacts/` | Dev-set artifacts: two tasks (see above) |
 | `AGENTS.md` | The full rules, for a coding agent working on your entry |
 
 ## The validation layer (ours, not part of the template)
@@ -72,20 +81,21 @@ Everything in this repository is the organizers' template except `scope_guard.py
 
 ## Evidence: what each result is
 
-None of the results below is an autonomous run of this harness with the model on an MEP task. That run has not been done.
-
 | Result | What produced it | Clash Flag's part |
 |---|---|---|
-| The two MEP dev tasks (`data-hall-mep-routing`, `-offset`) scored 0 in the organizers' saved run. Every clash was a joint between segments of the same service | The organizers' run; the public grader | Diagnosis only |
+| The two MEP dev tasks (`data-hall-mep-routing`, `-offset`) scored 0 in the organizers' saved run. All 41 clashing pairs (23 + 18) were joints between segments of the same service | The organizers' saved run; the public grader | Diagnosis only |
 | On the saved models, the check finds the same 23 and 18 clashing pairs as the public grader. It also matches on 4 models we repaired (3, 2, 0, 0), and raises nothing on the saved `data-center-site-model` IFC | Offline check, no model | The check agrees with the grader |
 | A generic trim of the segment ends of the saved models, applied by us, scores 0.920 and 0.934 | **Offline repair by us**, no agent | None: it shows the clash gate was the only obstacle |
-| Claude Opus 5.5 rewrote the saved build script itself, from the instruction, the script and the flag text, plus our request to remove the clashes and keep connectivity. Public grader: **0.920** (two turns, the second after the re-check) and **0.934** (one turn) | **Agent-repair replay** through the Anthropic API, outside this harness; single samples, $0.70 | The flag text was the agent's input |
-| In the real harness and task container, the flag arrived in the tool result of the build that made the clashes. Re-checks reported the new counts (23, then 6, then 0), the deliverable was never modified, and non-IFC tasks were unaffected. `kit check` passes | **Integration test with a scripted stand-in for the model**, no model calls | Delivery works as designed |
-| Scope Guard, replayed on the template's 29 committed dev outputs: it recognizes a restriction in 2 instructions and flags 1 (two rows keyed 3.05 in a check confined to Section 2) | Offline replay, no model | — |
+| Claude Opus 5.5 rewrote the organizers' saved build scripts itself, given the instruction, the script, the flag text and our request to remove the clashes and keep connectivity. Public grader: **0.920** (two turns, the second after the re-check) and **0.934** (one turn) | **Direct repair replay** through the Anthropic API, outside this harness; single samples, $0.70 | The flag text was the agent's input |
+| In the real harness and task container, the flag arrived in the tool result of the build that made the clashes. Re-checks reported 23 → 6 → 0, the deliverable was never modified, and non-IFC tasks were unaffected. `kit check` passes | **Integration test with a scripted stand-in for the model**, no model calls | Delivery works as designed |
+| **`data-hall-mep-routing`: the agent built a model with 23 clashing pairs, got the flag, and repaired its own script. Clean 8 turns later; verifier 0.904** | **Autonomous run of this harness** (the artifact above); one run, no run without the flag | The flag was the agent's first clash feedback; it then wrote its own test |
+| Scope Guard, replayed on the template's 29 committed dev outputs: it recognizes a restriction in 2 instructions and flags 1 (two rows keyed 3.05 in a check confined to Section 2). In our two `engineers-estimate-check` runs it raised no flag | Offline replay; autonomous runs | — |
 
-**Not tested yet:**
-- whether the model, in a live run of this harness, acts on the flag mid-run, and the dev score that results;
-- any effect of Scope Guard's checks on a score.
+**Not measured:**
+- the score this harness would get on the MEP task without the flag;
+- a live run on `data-hall-mep-routing-offset`;
+- any effect of Scope Guard's checks on a score;
+- any model other than Claude Opus 5.5.
 
 ## Tests
 
