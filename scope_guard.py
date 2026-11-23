@@ -14,8 +14,8 @@
 
 """Scope Guard: deterministic checks of explicit task restrictions.
 
-This file is not part of the organizers' template. It adds two checks, and both
-only flag. Neither blocks an action or changes a deliverable.
+This file is not part of the organizers' template. It adds three checks, and
+all of them only flag. None blocks an action or changes a deliverable.
 
 1. Unit confinement. When the instruction confines the work to a numbered unit
    ("Stay in Section 2"), and a table in a file the agent wrote keys its rows
@@ -24,6 +24,12 @@ only flag. Neither blocks an action or changes a deliverable.
 2. Write freeze. When the instruction says nothing else is to change, files
    that existed before the run, were modified, and are not named in the
    instruction are flagged.
+3. Clash restriction. When the instruction asks for an IFC model and forbids
+   clashes ("Zero hard clashes"), every IFC file written in the working
+   directory or /tmp is checked with IfcOpenShell's standard clash tree
+   (`ifc_clash.py`, run by the task container's own `python3`), and pairs of
+   elements whose solids overlap are flagged. Without IfcOpenShell in the task
+   container this check is off, and the run log says so.
 
 A flag is appended to the output of the command that follows the write, so the
 model sees it while it can still act. A flag that still stands when the agent
@@ -32,8 +38,9 @@ stops is added to the final message for the person who reads it.
 What the guard does not do: it calls no model, it does not judge whether a
 flagged row is wrong, and it stays inactive (no extra command, no changed
 prompt) unless the instruction contains one of the phrasings below. Restrictions
-phrased any other way, restrictions on anything but numbered units and file
-changes, and files it cannot read as tables (PDF, images) are not checked.
+phrased any other way, restrictions on anything but numbered units, file
+changes and IFC clashes, and files it cannot read as tables (PDF, images) are
+not checked.
 """
 
 from __future__ import annotations
@@ -42,6 +49,8 @@ import asyncio
 import csv
 import dataclasses
 import io
+import json
+import pathlib
 import posixpath
 import re
 import secrets
@@ -91,6 +100,23 @@ FREEZE = [
 ]
 
 
+# An IFC deliverable, not "IFC" as in issued for construction.
+IFC = re.compile(r"\.ifc\b|\bifcopenshell\b|\bIFC\s?(?:2x3|4(?:x\d)?)\b|\bIFC\s+(?:models?|files?|schema)\b", re.I)
+_CLASHES = r"(?:clash(?:es)?|collisions?|interferences?)"
+CLASH = [
+    re.compile(p, re.I)
+    for p in (
+        # "Zero hard clashes", "no collisions", not "no clash check is needed"
+        rf"\b(?:zero|no)\s+(?:hard\s+|physical\s+)?{_CLASHES}\b"
+        r"(?!\s+(?:check|detection|test|report|analysis|review)s?\b)",
+        r"\b(?:clash|collision|interference)[-\s]free\b",
+        rf"\bfree\s+(?:of|from)\s+(?:any\s+)?(?:hard\s+)?{_CLASHES}\b",
+        r"\b(?:must|shall|may|should)\s+not\s+(?:clash|collide|intersect|interpenetrate)\b",
+        r"\bnothing\s+(?:clashes|collides)\b",
+    )
+]
+
+
 @dataclasses.dataclass(frozen=True)
 class Directives:
   """The explicit restrictions recognized in one instruction."""
@@ -99,10 +125,11 @@ class Directives:
   allowed: frozenset[int] = frozenset()  # {2}
   unit_quote: str = ""  # the instruction sentence that confines the unit
   freeze_quote: str = ""  # the instruction sentence that freezes other files
+  clash_quote: str = ""  # the instruction clause that forbids clashes in an IFC model
 
   @property
   def active(self) -> bool:
-    return bool(self.allowed or self.freeze_quote)
+    return bool(self.allowed or self.freeze_quote or self.clash_quote)
 
   @property
   def unit(self) -> str:
@@ -122,6 +149,21 @@ def _sentence(text: str, pos: int) -> str:
       return " ".join(text[start : m.start()].split())[:400]
     start = m.end()
   return " ".join(text[start:].split())[:400]
+
+
+_BREAK = re.compile(r"(?<=[.!?])\s+|\n[ \t]*(?:\n|[-*•][ \t]+|\d+\.[ \t]+|#)")
+
+
+def _clause(text: str, pos: int) -> str:
+  """Returns the sentence or list item of `text` around offset `pos`, without markup."""
+  start, end = 0, len(text)
+  for m in _BREAK.finditer(text):
+    if m.end() <= pos:
+      start = m.end()
+    elif m.start() >= pos:
+      end = m.start()
+      break
+  return " ".join(re.sub(r"\*\*|__|`", "", text[start:end]).split())[:300]
 
 
 def _labels(text: str) -> set[int]:
@@ -153,7 +195,14 @@ def parse(instruction: str) -> Directives:
     if m:
       freeze_quote = _sentence(instruction, m.start() + 1)
       break
-  return Directives(kind, frozenset(allowed), unit_quote, freeze_quote)
+  clash_quote = ""
+  if IFC.search(instruction):
+    for pattern in CLASH:
+      m = pattern.search(instruction)
+      if m:
+        clash_quote = _clause(instruction, m.start())
+        break
+  return Directives(kind, frozenset(allowed), unit_quote, freeze_quote, clash_quote)
 
 
 # --- 2. Tables in a written file ----------------------------------------------
@@ -330,6 +379,12 @@ SEPARATOR = "@@scope-guard@@"
 MAX_FILE_KB = 8192
 MAX_FILES = 25
 MAX_LISTED = 8
+CLASH_SCRIPT = pathlib.Path(__file__).with_name("ifc_clash.py")
+CLASH_TAG = "@@ifc-clash@@"  # ifc_clash.TAG
+MAX_IFC_KB = 51200
+MAX_IFC_CHECKS = 3  # IFC files checked per command
+MAX_PAIRS_SHOWN = 12
+IFC_TIMEOUT_SEC = 120
 
 
 class Guard:
@@ -340,6 +395,8 @@ class Guard:
   """
 
   MARKER_DIR = "/tmp"  # in the task container, outside the deliverables
+  SCRATCH_DIRS = ("/tmp",)  # where agents build trial IFC files, besides workdir
+  PYTHON = "python3"  # the task container's own interpreter runs ifc_clash.py
 
   def __init__(self, session: Any):
     self.session = session
@@ -354,6 +411,12 @@ class Guard:
     self._rows: dict[str, list[Row]] = {}  # path -> standing check-1 flags
     self._frozen: list[str] = []  # standing check-2 flags
     self._told: set[tuple[str, ...]] = set()  # flags already shown to the model
+    self._ifc_sums: dict[str, str] = {}  # IFC path -> cksum of the version checked
+    self._clashes: dict[str, dict[str, Any]] = {}  # IFC path -> its standing result
+    self._pairs_told: set[tuple[str, str]] = set()  # clashing pairs already listed
+    self._counts_told: dict[str, int] = {}  # IFC path -> pair count last reported
+    self._fresh: set[str] = set()  # IFC paths checked since the last notice
+    self._clash_off = ""  # why the clash check cannot run, once known
 
   def wrap(self, session: Any) -> Any:
     """Returns the session the relay should use: a proxy only when active."""
@@ -374,13 +437,41 @@ class Guard:
       if "ok" not in (result.get("output") or ""):
         raise RuntimeError("could not write the start marker")
       d = self.directives
+      if d.clash_quote:
+        await self._probe_ifc()
+        if not self.active:  # nothing else to check; the log says why
+          return
       await self.session.log(
           "scope guard: active"
           + (f"; confined to {d.unit}" if d.allowed else "")
           + ("; other files frozen" if d.freeze_quote else "")
+          + ("; IFC clash check" if d.clash_quote and not self._clash_off else "")
       )
     except Exception as exc:  # pylint: disable=broad-exception-caught
       await self._off(exc)
+
+  async def _clash_unavailable(self, reason: str) -> None:
+    """Turns the clash check off, saying so in the run log, never silently."""
+    self._clash_off = reason[:300] or "unknown reason"
+    await self.session.log(f"scope guard: IFC clash check OFF: {self._clash_off}")
+    d = self.directives
+    if not (d.allowed or d.freeze_quote):
+      self.active = False
+
+  async def _probe_ifc(self) -> None:
+    """Checks that the task container can run ifc_clash.py at all."""
+    result = await self.session.exec(
+        f"{self.PYTHON} -I -c 'import ifcopenshell, ifcopenshell.geom;"
+        " print(\"ifcopenshell\", ifcopenshell.version)' 2>&1 | tail -n 1",
+        60,
+    )
+    output = (result.get("output") or "").strip()
+    if not output.startswith("ifcopenshell "):
+      await self._clash_unavailable(f"{self.PYTHON} cannot import ifcopenshell.geom: {output}")
+    elif not CLASH_SCRIPT.is_file():
+      await self._clash_unavailable(f"{CLASH_SCRIPT.name} is missing from the harness")
+    else:
+      await self.session.log(f"scope guard: IFC clash check uses the task container's {output}")
 
   async def _off(self, exc: BaseException) -> None:
     if type(exc).__name__ == "Cancelled":
@@ -393,6 +484,15 @@ class Guard:
 
   async def _poll(self) -> None:
     """Refreshes the standing flags from the files changed since the start."""
+    if self.directives.clash_quote and not self._clash_off:
+      try:
+        await self._poll_ifc()
+      except Exception as exc:  # pylint: disable=broad-exception-caught
+        if type(exc).__name__ == "Cancelled":
+          raise
+        await self._clash_unavailable(f"{type(exc).__name__}: {exc}")
+    if not (self.directives.allowed or self.directives.freeze_quote):
+      return
     root, marker = shlex.quote(self.session.workdir), shlex.quote(self._marker)
     command = (
         f"find {root} -xdev -type f -newer {marker} ! -size +{MAX_FILE_KB}k"
@@ -433,6 +533,111 @@ class Guard:
         for p in frozen.splitlines()
         if p.strip() and not named(p, self.session.instruction)
     ]
+
+  async def _poll_ifc(self) -> None:
+    """Checks the IFC files that are new or changed since they were last checked."""
+    roots = " ".join(shlex.quote(d) for d in (self.session.workdir, *self.SCRATCH_DIRS))
+    result = await self.session.exec(
+        f"find {roots} -xdev -type f -iname '*.ifc' -newer {shlex.quote(self._marker)}"
+        f" ! -size +{MAX_IFC_KB}k -exec cksum {{}} + 2>/dev/null | head -n 100",
+        30,
+    )
+    if result.get("timed_out"):
+      raise RuntimeError("the IFC file scan timed out")
+    sums, listing = {}, (result.get("output") or "").splitlines()
+    for line in listing:
+      parts = line.split(" ", 2)
+      if len(parts) == 3 and parts[0].isdigit():
+        sums[parts[2]] = parts[0] + " " + parts[1]
+    if len(listing) < 100:  # head did not cut the listing
+      for path in [p for p in self._clashes if p not in sums]:  # deleted or too large now
+        del self._clashes[path]
+    todo = [p for p in sorted(sums) if self._ifc_sums.get(p) != sums[p]][:MAX_IFC_CHECKS]
+    left = self.session.time_left()
+    if not todo or (left is not None and left < IFC_TIMEOUT_SEC + 60):
+      return
+    for path in todo:
+      self._ifc_sums[path] = sums[path]  # this version is checked once, even if it fails
+    end = "SCOPE_GUARD_IFC_CLASH_EOF"
+    command = (
+        f"{self.PYTHON} -I - {' '.join(shlex.quote(p) for p in todo)} 2>/dev/null"
+        f" <<'{end}'\n{CLASH_SCRIPT.read_text()}\n{end}\n"
+    )
+    result = await self.session.exec(command, IFC_TIMEOUT_SEC)
+    line = next(
+        (l for l in (result.get("output") or "").splitlines() if l.startswith(CLASH_TAG)), ""
+    )
+    try:
+      data = json.loads(line[len(CLASH_TAG) :]) if line else None
+    except ValueError:
+      data = None
+    if not isinstance(data, dict):
+      for path in todo:
+        self._clashes.pop(path, None)
+      how = "timed out" if result.get("timed_out") else f"exit code {result.get('exit_code')}"
+      await self.session.log(f"scope guard: IFC clash check gave no result ({how}): {', '.join(todo)}"[:500])
+      return
+    if "unavailable" in data:
+      await self._clash_unavailable(str(data["unavailable"]))
+      return
+    for path, found in sorted(data.get("files", {}).items()):
+      if "error" in found:
+        self._clashes.pop(path, None)
+        await self.session.log(f"scope guard: IFC clash check could not read {path}: {found['error']}"[:500])
+        continue
+      self._clashes[path] = found
+      self._fresh.add(path)
+      await self.session.log(
+          f"scope guard: IFC clash check {path}: {found['pairs']} clashing pairs"
+          f" ({found.get('excused', 0)} excused) among {found['elements']} elements"
+      )
+
+  def _clash_lines(self) -> list[str]:
+    """Describes the IFC files checked since the last notice: what is new in them."""
+    lines, fresh = [], sorted(p for p in self._fresh if p in self._clashes)
+    self._fresh.clear()
+    for path in fresh:
+      found, before = self._clashes[path], self._counts_told.get(path)
+      count, rel = found["pairs"], self._relative(path)
+      pairs = f"{count} pair{'' if count == 1 else 's'} of elements whose solids overlap"
+      new = [p for p in found["listed"] if (p[0], p[1]) not in self._pairs_told]
+      was = f" (was {before})" if before is not None and before != count else ""
+      if new:
+        shown = new[:MAX_PAIRS_SHOWN]
+        self._pairs_told.update((p[0], p[1]) for p in shown)
+        kinds: dict[str, int] = {}
+        for a, b, _, _ in found["listed"]:
+          kind = a.split(" ", 1)[0] + " x " + b.split(" ", 1)[0]
+          kinds[kind] = kinds.get(kind, 0) + 1
+        by_class = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1])[:4])
+        same = any(a.split(" ", 1)[0] == b.split(" ", 1)[0] for a, b, _, _ in found["listed"])
+        described = "; ".join(
+            f"{a} x {b} ("
+            + (f"{depth} mm deep" if depth is not None else "collision")
+            + f" at {where[0]}, {where[1]}, {where[2]} mm)"
+            for a, b, depth, where in shown
+        )
+        more = count - len(shown) - (len(found["listed"]) - len(new))
+        lines.append(
+            f"{rel}: {pairs}{was} (IfcOpenShell"
+            " clash tree: more than 2 mm, or a collision)."
+            + (
+                " Pairs of the same class, such as two segments of one run meeting at a"
+                " joint, count too."
+                if same
+                else ""
+            )
+            + f" By class: {by_class}. "
+            + ("Pairs: " if len(new) == len(found["listed"]) else "Pairs not listed before: ")
+            + described
+            + (f"; and {more} more not listed yet." if more > 0 else ".")
+        )
+      elif count and count != before:
+        lines.append(f"{rel}: {pairs}{was}, all listed before.")
+      elif not count and before:
+        lines.append(f"{rel}: no clashing pairs now (was {before}).")
+      self._counts_told[path] = count
+    return lines
 
   def _flags(self) -> list[tuple[str, ...]]:
     """Returns a key for every standing flag."""
@@ -491,17 +696,33 @@ class Guard:
       if not await self._refresh():
         return ""
       new = [key for key in self._flags() if key not in self._told]
-      if not new:
+      clashes = self._clash_lines()
+      if not new and not clashes:
         return ""
       self._told.update(new)
       lines = self._describe(new)
-      await self.session.log(("scope guard: flagged. " + " ".join(lines))[:1000])
+      overlaps = any("no clashing pairs now" not in c for c in clashes)
+      if clashes:
+        clashes.insert(0, f'The instruction says: "{self.directives.clash_quote}"')
+      await self.session.log(("scope guard: flagged. " + " ".join(lines + clashes))[:1000])
+      kind = "text" if not clashes else "geometry" if not lines else ""
       return (
-          "\n[scope guard] Automatic text check by the harness, not a judgment.\n"
-          + "\n".join(lines)
-          + "\nIf this is outside what the instruction allows, correct it. If"
-          " it is intended, say so plainly in your final summary. Each finding"
-          " is shown once.\n"
+          f"\n[scope guard] Automatic {kind + ' ' if kind else ''}check by the harness, not a judgment.\n"
+          + "\n".join(lines + clashes)
+          + (
+              "\nIf this is outside what the instruction allows, correct it. If"
+              " it is intended, say so plainly in your final summary. Each finding"
+              " is shown once."
+              if lines
+              else ""
+          )
+          + (
+              "\nIf these overlaps are not allowed, correct the model and rebuild it;"
+              " every changed IFC file is checked again. Each pair is listed once."
+              if overlaps
+              else ""
+          )
+          + "\n"
       )
     except Exception as exc:  # pylint: disable=broad-exception-caught
       await self._off(exc)
@@ -512,12 +733,26 @@ class Guard:
     try:
       await self._refresh()
       keys = self._flags() if self.active else []
-      if not keys:
+      root = self.session.workdir.rstrip("/") + "/"
+      standing = [
+          f"{self._relative(p)} ({found['pairs']} pair{'' if found['pairs'] == 1 else 's'})"
+          for p, found in sorted(self._clashes.items())
+          if self.active and found["pairs"] and p.startswith(root)
+      ]
+      if not keys and not standing:
         return ""
+      lines = self._describe(keys)
+      if standing:
+        lines.append(
+            f'The instruction says: "{self.directives.clash_quote}" The IFC clash'
+            " check (IfcOpenShell clash tree) finds elements whose solids overlap in: "
+            + ", ".join(standing)
+            + "."
+        )
       return (
           "\n\n---\nScope check (automatic, added by the harness, not by the"
           " model; it does not judge whether the items are wrong): "
-          + " ".join(self._describe(keys))
+          + " ".join(lines)
           + " Please confirm they are intended."
       )
     except Exception as exc:  # pylint: disable=broad-exception-caught
