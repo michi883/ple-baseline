@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "dev_set": "85ad6d96fbf76ee64d9fb6339b3bf342b07128a2ebadc0a10f008c95dac01a48",
+  "created": "2026-11-23T01:58:41Z",
+  "harness": {
+    "name": "my-harness",
+    "model_api": "google-cloud/claude-opus-5-5",
+    "tree": "c184106de4490b55b8c12178eefa4788cd3a9a3be3d0160a087fcbed65a6ee0b",
+    "files": {
+      ".gitignore": "100644 42d6ecb1e3211e1dd0517ecbc9f7e8ef634547c2",
+      "AGENTS.md": "100644 25352486aa25e3f5398a58a2e26f08c572ab1087",
+      "LICENSE": "100644 261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "README.md": "100644 301a61f421ddb6fb483c1eaf079ed6c5838319c8",
+      "harness.py": "100644 f2aaf8b7ee5cf4ab494123701bdce9f047ff9fda",
+      "package-lock.json": "100644 5dba6d2880e4966fca650af70db1c7345d14d20b",
+      "package.json": "100644 701346d5e2e0f3fe4eee265d535319c0b8f634c5",
+      "requirements.txt": "100644 7bc03d775075fc452cc88d8aa6292087dd8eec65",
+      "scope_guard.py": "100644 b38ca4e4339a8ac1e1b592a8f3faeff535ff1483",
+      "serve.py": "100644 a0b209c2c38dc8204a48d1eb9e48b123f646707f",
+      "submission.yaml": "100644 238d7bfcd747dbfa50ddb21fa28bf2dd3883705e",
+      "task-tools.ts": "100644 f0f8e7043d3d4c56e8c473b6af0686145706811b",
+      "taskbridge.py": "100644 26cc3d6cf8dbcaed859731ce9a6881f4ca8bfe40",
+      "test_harness_wiring.py": "100644 2347a769a8ce6c07732d7b3b178f7c1f62497ad0",
+      "test_scope_guard.py": "100644 3decadf59db306bc1dec40ea4f58e20b2c23b592"
+    },
+    "commit": "3e6efa0573ebd64eb7f400d4937631b20cfbc51f",
+    "dirty": false
+  },
+  "tasks": {
+    "engineers-estimate-check": {
+      "run": "my-harness-20261122-203043",
+      "trial": "engineers-estimate-check__tpEuhTj",
+      "ended": "ok",
+      "reward": 1.0,
+      "tree": "c184106de4490b55b8c12178eefa4788cd3a9a3be3d0160a087fcbed65a6ee0b",
+      "dev_set": "85ad6d96fbf76ee64d9fb6339b3bf342b07128a2ebadc0a10f008c95dac01a48",
+      "files": {
+        "filesystem/Correspondence/Client/Memo_to_Callaway_2026-10-31.docx": "3b475a389c8b441880593d3ba94a8e4c55a589fe"
+      },
+      "final_message": "1d4dd15bde9263a3d7144bdde7e9c7eb01dee972",
+      "deleted": [],
+      "skipped": []
+    }
+  }
+}
