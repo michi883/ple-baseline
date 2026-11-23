@@ -28,6 +28,10 @@ under Pi's built-in provider names (`anthropic` and `google`) so Pi's catalog
 supplies their limits, thinking support, and image input capabilities. Any other
 model uses the OpenAI-compatible `MODEL_BASE_URL` and `MODEL_API_KEY` under a
 custom `model` provider with `UNKNOWN_MODEL` limits.
+
+`scope_guard.py` (not part of the organizers' template) adds deterministic checks
+of explicit restrictions in the instruction. It is inactive, and this harness
+then behaves exactly as the template, unless the instruction states one.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ import subprocess
 import tempfile
 from typing import Any
 
+import scope_guard
 import taskbridge
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -250,7 +255,10 @@ async def solve(session: taskbridge.Session) -> str:
     )
     agent_dir.mkdir()
     work.mkdir()
-    async with taskbridge.Relay(session) as relay:
+    guard = scope_guard.Guard(session)
+    await guard.start()
+    # When the guard is active, the relay's command output carries its flags.
+    async with taskbridge.Relay(guard.wrap(session)) as relay:
       env = relay.env()
       env.update(
           PI_CODING_AGENT_DIR=str(agent_dir),
@@ -295,9 +303,11 @@ async def solve(session: taskbridge.Session) -> str:
           stop_before_sec=STOP_BEFORE_SEC,
           log_prefix="pi: ",
       )
+      # Flags that still stand go to the reader of the final message.
+      note = await guard.final_note()
   if not run.replies:
     raise RuntimeError(
         f"pi exited with {done.code} before the model answered:"
         f" {done.stderr[-2000:]}"
     )
-  return session.final_message or "(pi stopped without a final message)"
+  return (session.final_message or "(pi stopped without a final message)") + note
