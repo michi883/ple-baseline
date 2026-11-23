@@ -1,19 +1,21 @@
-# Submission template: Pi on Claude Opus 5.5
+# PLE entry: Pi on Claude Opus 5.5 with Scope Guard
 
-A working entry for the Physical-Engineering’s Last Exam harness competition: the [Pi](https://github.com/badlogic/pi-mono) coding agent calling `google-cloud/claude-opus-5-5`.
+An entry for the Physical-Engineering's Last Exam harness competition. It is the organizers' [submission template](https://github.com/physical-engineerings-last-exam/submission-template) (the [Pi](https://github.com/badlogic/pi-mono) coding agent calling `google-cloud/claude-opus-5-5`) plus one addition of ours, Scope Guard.
 
-## Use it
+## What is whose
 
-1. Click **Use this template**. Public works. Make it private if you add a `.env` with API keys or want to keep your code to yourself, and install the [PLE-submission](https://github.com/apps/ple-submission) app on it.
-2. Clone it next to the competition repository and set `name` in `submission.yaml`.
-3. From the competition repository, check the entry and run the dev set (a `google-cloud` model needs a local proxy, see `docs/models.md`):
-   ```bash
-   uv run python -m kit check ../your-repo
-   uv run python eval/run.py ../your-repo     # writes artifacts/
-   ```
-4. Commit everything, `artifacts/` included, push, and submit the commit on the competition site.
+- **The organizers' template (Google LLC, Apache-2.0):** every file except the ones below. The first commit of this repository, `d988c45`, is the template unchanged, with the organizers' own dev-set artifacts.
+- **Ours (Apache-2.0):** `scope_guard.py`, `test_scope_guard.py`, `test_harness_wiring.py`, this README, and the changes to `harness.py` (2026-11-22: it creates the guard, hands the relay the guard's session proxy, and appends the guard's note to the final message).
+- **Not in this repository:** the third-party starter harness whose failure motivated the guard, and our analysis of it. Both are in [ple-veriflow-failure-analysis](https://github.com/michi883/ple-veriflow-failure-analysis).
 
-`artifacts/` already holds a dev-set run of Pi on Claude Opus 5.5 over all 29 dev tasks, so the template can be submitted unchanged. Once you change anything, `name` included, step 3 replaces it with your harness's run.
+## Dev-set artifacts in this commit
+
+`artifacts/` holds **one task of 29**: `engineers-estimate-check`, from a single run of this harness (run `my-harness-20261122-203043`, exported by `eval/run.py`). The other 28 dev tasks were not run and count 0, so the dev score is 1.0 / 29 = 0.034. The organizers' artifacts for the other tasks were removed because this harness did not produce them.
+
+- Local score on that task: 1.0 (46 of 46 rubric points). Judge: `claude-opus-5-5`.
+- Model: `claude-opus-5-5`, the model `submission.yaml` declares, served for the run from a personal Anthropic API key through a local LiteLLM proxy.
+- Usage: 9.42M input tokens (93% cached), 176k output tokens, 26 min 45 s of agent time, about $8.50 at list price.
+- **Scope Guard was active in that run and raised no flag**: the agent never wrote a row outside the section the instruction confines it to. The score is therefore not evidence that the guard works. The same model scored 0.543 on this task in the organizers' run of the unmodified template.
 
 ## Files
 
@@ -26,7 +28,7 @@ A working entry for the Physical-Engineering’s Last Exam harness competition: 
 | `taskbridge.py` | The competition protocol |
 | `scope_guard.py`, `test_scope_guard.py`, `test_harness_wiring.py` | Scope Guard and its tests (see below) |
 | `package.json`, `package-lock.json` | Pi 1.1.0 and every package it uses, pinned. To upgrade, edit `package.json`, run `npm install --package-lock-only`, commit both |
-| `artifacts/` | The dev-set artifacts the portal grades, one folder per dev task |
+| `artifacts/` | Dev-set artifacts: one task (see above) |
 | `AGENTS.md` | The full rules, for a coding agent working on your entry |
 
 ## Scope Guard (our addition, not part of the template)
