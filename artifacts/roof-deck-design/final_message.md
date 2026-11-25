@@ -1,0 +1,1 @@
+The heuristic search is noisy (a superset palette found a worse design). Let me run the polish step on the current best with an expanded spec menu (limits on gages/patterns still enforced):
